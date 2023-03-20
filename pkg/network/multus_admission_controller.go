@@ -4,20 +4,25 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	securityv1 "github.com/openshift/api/security/v1"
 	hyperv1 "github.com/openshift/hypershift/api/v1alpha1"
+	"github.com/pkg/errors"
 
 	"github.com/openshift/cluster-network-operator/pkg/bootstrap"
 	cnoclient "github.com/openshift/cluster-network-operator/pkg/client"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
 
 	"github.com/openshift/cluster-network-operator/pkg/names"
 	"github.com/openshift/cluster-network-operator/pkg/render"
-	"github.com/pkg/errors"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	uns "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,6 +53,8 @@ func getOpenshiftNamespaces(client cnoclient.Client) (string, error) {
 
 // renderMultusAdmissonControllerConfig returns the manifests of Multus Admisson Controller
 func renderMultusAdmissonControllerConfig(manifestDir string, externalControlPlane bool, bootstrapResult *bootstrap.BootstrapResult, client cnoclient.Client) ([]*uns.Unstructured, error) {
+	//sccSupported, err1 := isSccSupported(client.Default().RESTMapper().Kubernetes().Discovery()) // kubeDiscoveryClient
+
 	objs := []*uns.Unstructured{}
 	var err error
 
@@ -111,4 +118,55 @@ func renderMultusAdmissonControllerConfig(manifestDir string, externalControlPla
 	}
 	objs = append(objs, manifests...)
 	return objs, nil
+}
+
+func isSccSupported(client discovery.ServerResourcesInterface) (bool, error) {
+	// check for scc capability
+	hasSccCap, err := isAPIResourceRegistered(client, securityv1.GroupVersion, "securitycontextconstraints")
+	if err != nil {
+		return false, err
+	}
+
+	return hasSccCap, nil
+}
+
+// isAPIResourceRegistered determines if a specified API resource is registered on the cluster
+func isAPIResourceRegistered(client discovery.ServerResourcesInterface, groupVersion schema.GroupVersion, resourceName string) (bool, error) {
+	apis, err := client.ServerResourcesForGroupVersion(groupVersion.String())
+	if err != nil && !apierrors.IsNotFound(err) {
+		return false, err
+	}
+
+	if apis != nil {
+		for _, api := range apis.APIResources {
+			if api.Name == resourceName || api.SingularName == resourceName {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// IsNotFound returns true if the specified error was created by NewNotFound.
+// It supports wrapped errors and returns false when the error is nil.
+func IsNotFound(err error) bool {
+	reason, code := reasonAndCodeForError(err)
+	if reason == metav1.StatusReasonNotFound || code == http.StatusNotFound {
+		return true
+	}
+	return false
+}
+
+func reasonAndCodeForError(err error) (metav1.StatusReason, int32) {
+	if status, ok := err.(APIStatus); ok || errors.As(err, &status) {
+		return status.Status().Reason, status.Status().Code
+	}
+	return metav1.StatusReasonUnknown, 0
+}
+
+// APIStatus is exposed by errors that can be converted to an api.Status object
+// for finer grained details.
+type APIStatus interface {
+	Status() metav1.Status
 }
