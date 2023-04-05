@@ -12,6 +12,7 @@ import (
 
 	"github.com/openshift/cluster-network-operator/pkg/bootstrap"
 	cnoclient "github.com/openshift/cluster-network-operator/pkg/client"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -103,6 +104,14 @@ func renderMultusAdmissonControllerConfig(manifestDir string, externalControlPla
 		}
 		data.Data["ClusterIDLabel"] = ClusterIDLabel
 		data.Data["ClusterID"] = hcp.Spec.ClusterID
+
+		deployment := &appsv1.Deployment{}
+		err = client.ClientFor(names.ManagementClusterName).CRClient().Get(
+			context.TODO(), types.NamespacedName{Namespace: hsc.Namespace, Name: "cluster-network-operator"}, deployment)
+		if err != nil {
+			klog.Warningf("failed to retrieve CNO deployment manifest: %v", err)
+		}
+		data.Data["releaseImage"] = deployment.Spec.Template.ObjectMeta.Annotations["hypershift.openshift.io/release-image"]
 	}
 
 	manifests, err := render.RenderDir(filepath.Join(manifestDir, "network/multus-admission-controller"), &data)
